@@ -4,46 +4,69 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <vl53l4cd_class.h>
+#include <VL53L1X.h>
+
+struct Distance_Result {
+    int distance;
+    uint8_t status;
+};
 
 class Distance_Sensor {
     private:
         int8_t _xshut;
-        VL53L4CD _sensor;
+        VL53L4CD _sensor1;
+        VL53L1X _sensor2;
 
     public:
-        Distance_Sensor() : _sensor(&Wire, -1) {}
+        // -1 tells the driver we handle XSHUT manually
+        Distance_Sensor() : _sensor1(&Wire, -1) {}
 
-        // Pass XSHUT pin AND a unique I2C address (e.g., 0x30, 0x31...)
         bool begin(int8_t xshut, uint8_t newAddress) {
             _xshut = xshut;
-            
-            pinMode(_xshut, OUTPUT);
-            digitalWrite(_xshut, LOW); // Keep sensor in reset
-            delay(10);
-            digitalWrite(_xshut, HIGH); // Wake up this specific sensor
-            delay(10);
+            delay(50);
 
-            // Initialize at default 0x29
-            if (_sensor.begin() != 0) return false;
+            digitalWrite(_xshut, HIGH);
+            if (_xshut == 15) {
+                if (!_sensor2.init()) {
+                    return false;
+                }
 
-            // Immediately change to the unique address
-            if (_sensor.VL53L4CD_SetI2CAddress(newAddress) != 0) return false;
+                _sensor2.setAddress(newAddress);
+                _sensor2.startContinuous(50);
+            } else {
+                if (_sensor1.InitSensor(newAddress) != 0) {
+                    return false;
+                }
 
-            _sensor.VL53L4CD_StartRanging();
+               _sensor1.VL53L4CD_SetRangeTiming(50, 0);
+               _sensor1.VL53L4CD_StartRanging();
+            }
+
             return true;
         }
 
-        int measureDistance() {
-            uint8_t dataReady;
-            VL53L4CD_Result_t results;
-            _sensor.VL53L4CD_CheckForDataReady(&dataReady);
+        Distance_Result measureDistance() {
+            Distance_Result result = Distance_Result();
 
-            if (dataReady) {
-                _sensor.VL53L4CD_GetResult(&results);
-                _sensor.VL53L4CD_ClearInterrupt();
-                return (results.range_status == 0) ? results.distance_mm : -1;
+            if (_xshut == 15) {
+                const int measurement = _sensor2.readRangeContinuousMillimeters();
+                if (!_sensor2.timeoutOccurred()) {
+                    result.distance = measurement;
+                }
+            } else {
+                uint8_t NewDataReady = 0;
+                VL53L4CD_Result_t results;
+
+                if (_sensor1.VL53L4CD_CheckForDataReady(&NewDataReady) == 0) {
+                    _sensor1.VL53L4CD_ClearInterrupt();
+                    _sensor1.VL53L4CD_GetResult(&results);
+
+                    result.distance = results.distance_mm;
+                    result.status = results.range_status;
+                }
             }
-            return -1;
+
+            return result;
         }
 };
 #endif
