@@ -5,7 +5,7 @@
 #include <Compass.h>
 #include <ESP32Servo.h>
 #include <Wire.h>
-#include <Sorting.h>
+#include <Lidar.h>
 
 int BUTTON_PIN = 13;
 int BUTTON_STATE = 1;
@@ -14,18 +14,21 @@ int BUTTON_STATE = 1;
 Motor PINS
 */
 const int ENABLE_MOTOR = 32;
-const int MOTOR_1 = 26;
-const int MOTOR_2 = 25;
+const int MOTOR_1 = 25;
+const int MOTOR_2 = 26;
 const int ROBOT_WIDTH = 82;
 
 auto engine = Engine(MOTOR_1, MOTOR_2, ENABLE_MOTOR);
 Compass robotCompass;
 Servo myservo;
 
+Distance_Sensor leftSensor;
+Distance_Sensor rightSensor;
+
 void setup() {
-  Wire.begin();
-  Wire.setClock(400000);
   Serial.begin(9600);
+
+  Wire.begin();
 
   set_light_state(2, 0);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -38,35 +41,39 @@ void setup() {
   ledcSetup(0, 30000, 8);
   ledcAttachPin(ENABLE_MOTOR, 0);
 
-  setup_lidar_sensors();
   engine.begin();
 
-  // Initialize Compass
   if (!robotCompass.begin()) {
-      Serial.println("BNO085 Fail!");
+    Serial.println("BNO085 Fail!");
+    while(1) {};
   }
 
+  if (!leftSensor.begin(4, 0x30) || !rightSensor.begin(5, 0x31)) {
+    Serial.println("ToF Sensors failed to start!");
+    while(1) {};
+  }
+  
   myservo.attach(33); 
   set_light_state(2, 3);
 };
 
 float started = false;
 float last_error = 0;
-float last_time = millis();
-const size_t buffer_size = 30;
-float track_buffer[buffer_size] = { 0 };
-float targetAngle = 0;
-const float STRAIGHT_ANGLE = 80.0;
-const float Kp = 0.02;
-const float Kd = 0;
-int track_tracker = 0;
+float targetAngle = NULL;
+bool isClockwise = false;
+
+const int MIN_ANGLE = 55;
+const int MAX_ANGLE = 130;
+const int STRAIGHT_ANGLE = 88;
+
+const float Kp = 0;
+const float Kg = 0;
 
 void loop() {
 
     // Read and set sensor states
     BUTTON_STATE = digitalRead(BUTTON_PIN);
     blink_lights();
-    read_lidar_data();
 
     float newHeading = robotCompass.getYaw();
 
@@ -85,46 +92,19 @@ void loop() {
     set_light_state(2, 1);
     engine.drive(255);
 
-    float angle = targetAngle - newHeading;
-    if (angle > 180)  angle -= 360;
-    if (angle < -180) angle += 360;
+    float heading = targetAngle - newHeading;
+    if (heading > 180)  heading -= 360;
+    if (heading < -180) heading += 360;
 
-    float rad_angle = radians(angle);
-    float width = (SENSOR_DISTANCE[0] + SENSOR_DISTANCE[1]) * cos(rad_angle);
-        if (track_tracker == (buffer_size - 1)) {
-        track_tracker = 0;
-    } else {
-        track_tracker++;
+    const int leftDistance = leftSensor.measureDistance();
+    delay(50);
+    const int rightDistance = rightSensor.measureDistance();
+    int angle = Kg * angle + Kp * (leftDistance - rightDistance);
+    if (abs(angle) < 5) {
+      angle = 0;
     }
 
-    track_buffer[track_tracker] = width;
-    const float track = get_dominant_cluster_average(
-        buffer_size, track_buffer, 20
-    );
-    float distance = SENSOR_DISTANCE[0] * cos(rad_angle);
-
-    float error = (track) / 2 - distance; 
-    if (!last_error) {
-        last_error = error;
-    }
-
-    unsigned long now = millis();
-    float delta_t = (now - last_time) / 1000.0f;
-    last_time = now;
-
-
-    const float derivative_delta = (error - last_error) / delta_t;
-    last_error = error;
-
-    int turning_angle = STRAIGHT_ANGLE 
-        + Kp * error
-        + Kd * derivative_delta;
-
-    //Serial.printf("Left: %.2f | Right: %.2f | Width: %.2f\n", SENSOR_DISTANCE[1], SENSOR_DISTANCE[0], width);
-
-    float final_servo_angle = constrain(turning_angle, STRAIGHT_ANGLE - 45, STRAIGHT_ANGLE + 45);
-    Serial.printf("Proportional: %.2f | Error: %.2f | Derivative: %.2f | Angle: %.2f | Width: %.2f \n", Kp * error, error, Kd * derivative_delta, final_servo_angle, track);
-
-    myservo.write(final_servo_angle);
+    const int angle_constrained = constrain(STRAIGHT_ANGLE + angle, MIN_ANGLE, MAX_ANGLE);
+    myservo.write(angle_constrained);
 };
 
