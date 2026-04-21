@@ -84,15 +84,20 @@ void setup() {
 
 bool started = false;
 float last_error = 0;
-float targetAngle = NAN;
+float last_time = millis();
+int targetAngle = 0;
+int edge = 0;
 bool isClockwise = false;
 
-const int MIN_ANGLE = 45;
-const int MAX_ANGLE = 135;
+const int MIN_ANGLE = 60;
+const int MAX_ANGLE = 120;
 const int STRAIGHT_ANGLE = 88;
+const int TARGET_DISTANCE = 300;
+const int TURN_DISTANCE = 400;
 
-const float Kp = 0;
-const float Kg = 2.0;
+const float Kp = 0.09; // 0.1
+const float Kg = 0.95;
+const float Kd = 0.05; // 0.1
 
 void loop() {
     BUTTON_STATE = digitalRead(BUTTON_PIN);
@@ -102,7 +107,7 @@ void loop() {
     if (BUTTON_STATE == 0) {
       started = !started;
       targetAngle = newHeading;
-      delay(100);
+      delay(400);
     } 
 
     if (!started) {
@@ -112,35 +117,78 @@ void loop() {
     }
 
     set_light_state(2, 1);
-    //engine.drive(255);
+    engine.drive(255);
 
-    float heading = targetAngle - newHeading;
+    int heading = targetAngle - newHeading;
     if (heading > 180)  heading -= 360;
     if (heading < -180) heading += 360;
 
-    const Distance_Result frontDistance = frontSensor.measureDistance();
-    delay(20);
-
-    const Distance_Result leftDistance = leftSensor.measureDistance();
-    delay(20);
-
+    Distance_Result frontDistance = frontSensor.measureDistance();
+    Distance_Result leftDistance = leftSensor.measureDistance();
     const Distance_Result rightDistance = rightSensor.measureDistance();
 
-    int angle = Kg * heading;
+    // 2 or 4 when object is too far
+    
+    if (frontDistance.distance <= TURN_DISTANCE) {
+      isClockwise = leftDistance.distance <= 800 && leftDistance.status == 0;
+      while (frontDistance.distance <= 1000 || frontDistance.distance >= 2700) {
+        frontDistance = frontSensor.measureDistance();
+        //Serial.println(String("left:") + leftDistance.distance + " " + frontDistance.distance + " status: " + leftDistance.status);
 
-    Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") R: " 
-    + rightDistance.distance + "mm (" + rightDistance.status + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm");
+        if (isClockwise) {
+          myservo.write(MIN_ANGLE);
+        } else {
+          myservo.write(MAX_ANGLE);
+        }
 
-    // 4 - out of range
-    if (rightDistance.status == 0 && leftDistance.status == 0) {
-      angle += Kp * (leftDistance.distance - rightDistance.distance);
+        delay(20);
+      }
+
+      if (isClockwise) {
+        targetAngle -= 90;
+      } else {
+        targetAngle += 90;
+      }
+
+      targetAngle %= 360;
+      edge++;
+    }
+
+    float angle = Kg * heading;
+
+    //Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") T: " 
+    //+ targetAngle + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm");
+
+    const Distance_Result outerDistance = isClockwise ? leftDistance : leftDistance;
+
+    // if the robot is going counterclockwise,  we should use the right sensor
+    const int dist_err = outerDistance.distance - TARGET_DISTANCE;
+    float err = heading - last_error;
+
+    if (outerDistance.distance <= 850 && outerDistance.distance >= 100) {
+      angle += Kp * dist_err;
+    }
+
+    if (last_error == 0) {
+      last_time = millis();
+      last_error = err;
+    } else {
+      err /= (millis() - last_time);
+      last_time = millis();
+      angle -= Kd * err;
     }
 
     if (abs(angle) < 3) {
       angle = 0;
+
+      // Stop after the robot is centered in the sector
+      if (edge >= 12) {
+        engine.stop();
+        ESP.restart();
+      }
     }
 
-    const int angle_constrained = constrain(STRAIGHT_ANGLE + angle, MIN_ANGLE, MAX_ANGLE);
+    const int angle_constrained = constrain(STRAIGHT_ANGLE + round(angle), MIN_ANGLE, MAX_ANGLE);
     myservo.write(angle_constrained);
 };
 

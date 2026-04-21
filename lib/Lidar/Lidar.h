@@ -32,6 +32,8 @@ class Distance_Sensor {
                 }
 
                 _sensor2.setAddress(newAddress);
+                _sensor2.setDistanceMode(VL53L1X::Long);
+                _sensor2.setMeasurementTimingBudget(50000);
                 _sensor2.startContinuous(50);
             } else {
                 if (_sensor1.InitSensor(newAddress) != 0) {
@@ -49,7 +51,7 @@ class Distance_Sensor {
             Distance_Result result = Distance_Result();
 
             if (_xshut == 15) {
-                const int measurement = _sensor2.readRangeContinuousMillimeters();
+                const int measurement = _sensor2.read();
                 if (!_sensor2.timeoutOccurred()) {
                     result.distance = measurement;
                 }
