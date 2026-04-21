@@ -152,6 +152,7 @@ void loop() {
 
       targetAngle %= 360;
       edge++;
+      set_light_state(2, 3, edge);
     }
 
     float angle = Kg * heading;

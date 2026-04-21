@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-void set_light_state(uint8_t sensor, uint8_t state);
+void set_light_state(uint8_t sensor, uint8_t state, int blink = -1);
 void blink_lights();
 
 #ifdef __cplusplus
