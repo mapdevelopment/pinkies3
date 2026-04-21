@@ -126,8 +126,6 @@ void loop() {
     Distance_Result frontDistance = frontSensor.measureDistance();
     Distance_Result leftDistance = leftSensor.measureDistance();
     const Distance_Result rightDistance = rightSensor.measureDistance();
-
-    // 2 or 4 when object is too far
     
     if (frontDistance.distance <= TURN_DISTANCE) {
       isClockwise = leftDistance.distance <= 800 && leftDistance.status == 0;
@@ -152,7 +150,7 @@ void loop() {
 
       targetAngle %= 360;
       edge++;
-      set_light_state(2, 3, edge);
+      set_light_state(33, 3, edge - 1);
     }
 
     float angle = Kg * heading;
