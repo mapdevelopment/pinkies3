@@ -85,7 +85,7 @@ void setup() {
 bool started = false;
 float last_error = 0;
 float last_time = millis();
-int targetAngle = 0;
+float targetAngle = 0;
 int edge = 0;
 bool isClockwise = false;
 
@@ -119,7 +119,7 @@ void loop() {
     set_light_state(2, 1);
     engine.drive(255);
 
-    int heading = targetAngle - newHeading;
+    float heading = targetAngle - newHeading;
     if (heading > 180)  heading -= 360;
     if (heading < -180) heading += 360;
 
@@ -148,7 +148,7 @@ void loop() {
         targetAngle += 90;
       }
 
-      targetAngle %= 360;
+      targetAngle = fmod(targetAngle, 360.0);
       edge++;
       set_light_state(33, 3, edge - 1);
     }
@@ -161,7 +161,7 @@ void loop() {
     const Distance_Result outerDistance = isClockwise ? leftDistance : leftDistance;
 
     // if the robot is going counterclockwise,  we should use the right sensor
-    const int dist_err = outerDistance.distance - TARGET_DISTANCE;
+    const float dist_err = outerDistance.distance - TARGET_DISTANCE;
     float err = heading - last_error;
 
     if (outerDistance.distance <= 850 && outerDistance.distance >= 100) {
