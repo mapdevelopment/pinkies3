@@ -26,7 +26,7 @@ void blink_lights() {
         // blinks every 300ms
         if ((millis() / 300) % 2 == 0) {
             if (blinks[i] != -1) {
-                if (blinks[i] >= 0) {
+                if (blinks[i] > 0) {
                     digitalWrite(i, 1);
                     blinks[i]--;
                 }

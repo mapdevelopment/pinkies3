@@ -7,12 +7,16 @@
 #include <Wire.h>
 #include <Lidar.h>
 
+#define RXD2 3
+#define TXD2 1
+
 int BUTTON_PIN = 13;
 int BUTTON_STATE = 1;
 
 /*
 Motor PINS
 */
+const bool OBSTICLE_ROUND = false;
 const int ENABLE_MOTOR = 32;
 const int MOTOR_1 = 26;
 const int MOTOR_2 = 25;
@@ -21,6 +25,7 @@ const int ROBOT_WIDTH = 82;
 auto engine = Engine(MOTOR_1, MOTOR_2, ENABLE_MOTOR);
 Compass robotCompass;
 Servo myservo;
+HardwareSerial camera_serial(2);
 
 Distance_Sensor leftSensor;
 Distance_Sensor rightSensor;
@@ -28,6 +33,10 @@ Distance_Sensor frontSensor;
 
 void setup() {
   Serial.begin(115200);
+
+  if (OBSTICLE_ROUND) {
+    camera_serial.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  }
 
   Wire.begin();
 
@@ -87,13 +96,14 @@ float last_error = 0;
 float last_time = millis();
 float targetAngle = 0;
 int edge = 0;
-bool isClockwise = false;
+bool isClockwise = true;
+bool sideLock = false;
 
 const int MIN_ANGLE = 60;
 const int MAX_ANGLE = 120;
 const int STRAIGHT_ANGLE = 88;
 const int TARGET_DISTANCE = 300;
-const int TURN_DISTANCE = 400;
+const int TURN_DISTANCE = 500;
 
 const float Kp = 0.09; // 0.1
 const float Kg = 0.95;
@@ -126,12 +136,21 @@ void loop() {
     Distance_Result frontDistance = frontSensor.measureDistance();
     Distance_Result leftDistance = leftSensor.measureDistance();
     const Distance_Result rightDistance = rightSensor.measureDistance();
-    
-    if (frontDistance.distance <= TURN_DISTANCE) {
-      isClockwise = leftDistance.distance <= 800 && leftDistance.status == 0;
-      while (frontDistance.distance <= 1000 || frontDistance.distance >= 2700) {
+    const int width = leftDistance.distance + rightDistance.distance;
+
+    Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") R: " 
+    + rightDistance.distance + "(" + rightDistance.status + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm (" + frontDistance.status + ")");
+
+
+    if (frontDistance.distance <= TURN_DISTANCE && frontDistance.status == 0 && width >= 900) {
+      if (!sideLock) {
+        isClockwise = (leftDistance.distance <= 700 && (leftDistance.status == 0 || leftDistance.status == 2));
+        sideLock = true;
+      }
+
+      while (frontDistance.distance <= 1500 || frontDistance.distance >= 2700 || frontDistance.status == 4) {
         frontDistance = frontSensor.measureDistance();
-        //Serial.println(String("left:") + leftDistance.distance + " " + frontDistance.distance + " status: " + leftDistance.status);
+        Serial.println(String("left:") + leftDistance.distance + " " + frontDistance.distance + " status: " + leftDistance.status);
 
         if (isClockwise) {
           myservo.write(MIN_ANGLE);
@@ -150,22 +169,30 @@ void loop() {
 
       targetAngle = fmod(targetAngle, 360.0);
       edge++;
-      set_light_state(33, 3, edge - 1);
+      set_light_state(23, 3, edge - 1);
     }
 
     float angle = Kg * heading;
 
-    //Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") T: " 
-    //+ targetAngle + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm");
-
-    const Distance_Result outerDistance = isClockwise ? leftDistance : leftDistance;
+    const Distance_Result outerDistance = isClockwise ? leftDistance : rightDistance;
 
     // if the robot is going counterclockwise,  we should use the right sensor
-    const float dist_err = outerDistance.distance - TARGET_DISTANCE;
+    float dist_err = outerDistance.distance - width / 2;
+
+    if (OBSTICLE_ROUND && camera_serial.available() > 0) {
+      char data = camera_serial.read();
+      Serial.println(data);
+    }
+
     float err = heading - last_error;
 
-    if (outerDistance.distance <= 850 && outerDistance.distance >= 100) {
-      angle += Kp * dist_err;
+    if (outerDistance.distance <= 850 && width <= 1100) {
+      angle += Kp * dist_err * (isClockwise ? 1 : -1);
+      if (abs(dist_err) < 50 && edge == 12 && heading <= 5) {
+        delay(2000);
+        engine.stop();
+        ESP.restart();
+      }
     }
 
     if (last_error == 0) {
@@ -177,14 +204,10 @@ void loop() {
       angle -= Kd * err;
     }
 
-    if (abs(angle) < 3) {
+    if (abs(angle) < 2) {
       angle = 0;
 
       // Stop after the robot is centered in the sector
-      if (edge >= 12) {
-        engine.stop();
-        ESP.restart();
-      }
     }
 
     const int angle_constrained = constrain(STRAIGHT_ANGLE + round(angle), MIN_ANGLE, MAX_ANGLE);
