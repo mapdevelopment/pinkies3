@@ -12,7 +12,7 @@ private:
 
 public:
     // Pass -1 if you don't have a reset pin wired, but it's highly recommended!
-    Compass(int8_t resetPin = 27) : _resetPin(resetPin) {}
+    Compass(int8_t resetPin = 32) : _resetPin(resetPin) {}
 
     bool begin() {
         // 1. HARDWARE RESET (If pin is provided)

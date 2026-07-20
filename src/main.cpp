@@ -6,28 +6,9 @@
 #include <ESP32Servo.h>
 #include <Wire.h>
 #include <Lidar.h>
-#include <Serial.h>
 #include <vector>
-
-#define RXD2 16
-#define TXD2 17
-#define RED_PILLAR 1
-#define GREEN_PILLAR 2
-#define RED_DISTANCE 800
-#define GREEN_DISTANCE 100
-
-// Constants
-const int BUTTON_PIN = 14;
-const bool OBSTACLE_ROUND = true;
-const int ENABLE_MOTOR = 32;
-const int MOTOR_1 = 26;
-const int MOTOR_2 = 25;
-const int ROBOT_WIDTH = 150;
-const int MIN_ANGLE = 60;
-const int MAX_ANGLE = 120;
-const int STRAIGHT_ANGLE = 88;
-const int TARGET_DISTANCE = OBSTACLE_ROUND ? 500 : 500;
-const int WIDTH_THRESHOLD = 70;
+#include <Config.h>
+#include <Pixy2.h>
 
 // PPD Constants
 const float Kp = 0.09; // 0.1
@@ -47,6 +28,8 @@ int cumulativeWidth = 0;
 int measurementCount = 0;
 int clockStop = 0;
 bool button_state = 1;
+int ticks = 0;
+int currently_tracking = -1;
 
 // Class variables
 auto engine = Engine(MOTOR_1, MOTOR_2, ENABLE_MOTOR);
@@ -55,6 +38,7 @@ Servo myservo;
 Distance_Sensor leftSensor;
 Distance_Sensor rightSensor;
 Distance_Sensor frontSensor;
+Pixy2 pixy;
 
 int get_distance(int sector, bool turn = false) {
   if (!OBSTACLE_ROUND) {
@@ -81,10 +65,10 @@ void setup() {
 
   // Reset
   pinMode(5, OUTPUT);
-  pinMode(18, OUTPUT);
+  pinMode(2, OUTPUT);
   pinMode(15, OUTPUT);
   digitalWrite(5, LOW);
-  digitalWrite(18, LOW);
+  digitalWrite(2, LOW);
   digitalWrite(15, LOW);
 
   delay(50);
@@ -103,7 +87,7 @@ void setup() {
 
   delay(50);
 
-  if (!rightSensor.begin(18, 0x32)) {
+  if (!rightSensor.begin(2, 0x32)) {
     Serial.println("Right ToF failed!");
     while(1);
   }
@@ -118,8 +102,13 @@ void setup() {
 
   engine.begin();
 
-  myservo.attach(33, 500, 2400); 
-  set_light_state(2, 3);
+  myservo.attach(SERVO_PIN, 500, 2400); 
+  myservo.write(STRAIGHT_ANGLE);
+  set_light_state(16, 3);
+  
+  pixy.init();
+  pixy.setLamp(1, 0);
+  pixy.setLED(0, 0, 0);
 };
 
 void loop() {
@@ -133,13 +122,13 @@ void loop() {
     } 
 
     if (!started) {
-      set_light_state(2, 3);
+      set_light_state(16, 3);
       engine.stop();
       return;
     }
 
-    set_light_state(2, 1);
-    engine.drive(255);
+    engine.drive(150);
+    pixy.ccc.getBlocks();
 
     float heading = targetAngle - robotCompass.getYaw();
     if (heading > 180)  heading -= 360;
@@ -159,8 +148,10 @@ void loop() {
 
     // Turning
     if (frontDistance.distance <= (get_distance(nextSector, true) + ROBOT_WIDTH)
-      && frontDistance.status == 0 && width >= 1000) {
+      && frontDistance.status == 0 && width >= 1000 && !OBSTACLE_ROUND) {
       if (!sideLock) {
+
+        // can be done using camera if orange line is detected first then we are going clockwise
         isClockwise = (leftDistance.distance <= 700 && (leftDistance.status == 0 || leftDistance.status == 2))
           || rightDistance.status == 4
           || (rightDistance.distance >= leftDistance.distance && rightDistance.status == 2 && leftDistance.status == 2);
@@ -169,32 +160,38 @@ void loop() {
       }
 
       if (!OBSTACLE_ROUND && measurementCount > 0) {
-        sectorWidth[currentSector] = constrain(cumulativeWidth / (measurementCount), 500, 900);
+        const int w = cumulativeWidth / measurementCount + ROBOT_WIDTH;
+        // dynamic, but for competition it would be better to have fixed widths for the sectors (600 or 1000 mm)
+        /*
+        sectorWidth[currentSector] = (
+          abs(MAX_ARENA_WIDTH - w) > abs(MIN_ARENA_WIDTH - w)) ? MIN_ARENA_WIDTH : MAX_ARENA_WIDTH
+        ;
+        */
+        
+        sectorWidth[currentSector] = constrain(
+          w,
+          MIN_ARENA_WIDTH, 
+          MAX_ARENA_WIDTH) - ROBOT_WIDTH
+        ;
       }
 
-      if (OBSTACLE_ROUND) {
-        sectorWidth[currentSector] = TARGET_DISTANCE;
-      }
-
-      if (isClockwise) {
+      if (isClockwise) 
         targetAngle -= 90;
-      } else {
-        targetAngle += 90;
-      }
-
-      while (abs(heading) >= 4) {
+      else targetAngle += 90;
+      
+      targetAngle = fmod(targetAngle, 360.0);
+      while (abs(heading) >= 2) {
         heading = targetAngle - robotCompass.getYaw();
 
         if (isClockwise) {
-          myservo.write(MIN_ANGLE);
-        } else {
           myservo.write(MAX_ANGLE);
+        } else {
+          myservo.write(MIN_ANGLE);
         }
 
         delay(20);
       }
 
-      targetAngle = fmod(targetAngle, 360.0);
       edge++;
       if (edge >= 12) {
         clockStop = millis();
@@ -208,6 +205,59 @@ void loop() {
     Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") R: " 
     + rightDistance.distance + "(" + rightDistance.status + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm (" + frontDistance.status + ") Sector: " + currentSector + " Width: " + width) ;
     
+    /*
+      Camera detection
+    */
+    bool obstacleDetected = false;
+    if (OBSTACLE_ROUND && pixy.ccc.numBlocks > 0 && millis() > ticks) {
+      int max_area = 0;
+      Block block;
+      for (int i = 0; i < pixy.ccc.numBlocks; i++) {
+        long area = (long)pixy.ccc.blocks[i].m_width * pixy.ccc.blocks[i].m_height;
+        int index = pixy.ccc.blocks[i].m_index;
+
+        if (area > max_area || index == currently_tracking) {
+          max_area = area;
+          block = pixy.ccc.blocks[i];
+          if (index == currently_tracking) {
+            break;
+          }
+        }
+      }
+
+      int off = 0;
+      if (currently_tracking != block.m_index) {
+        currently_tracking = block.m_index;
+        ticks = millis() + 100;
+        return;
+      }
+
+      if (block.m_signature == 1) {
+        off = -90;
+        set_light_state(17, 1);
+      } else {
+        off = 90;
+        set_light_state(16, 1);
+      }
+
+      Serial.println("Block: " + String(block.m_signature) + " X: " + block.m_x + " Y: " + block.m_y + " W: " + block.m_width + " H: " + block.m_height);
+
+      int c_err = pixy.frameWidth / 2 + off * (pixy.frameHeight / block.m_height) - block.m_x;
+      Serial.println("Error: " + String(c_err) + " Angle: " + angle);
+      if (block.m_height > 50 && block.m_height < 140)
+        angle = 0.08 * c_err;
+    } else {
+      set_light_state(16, 0);
+      set_light_state(17, 0);
+
+      if (currently_tracking != -1 && pixy.ccc.numBlocks == 0) {
+        currently_tracking = -1;
+        ticks = millis() + 100;
+      }
+
+      if (ticks > millis())
+        angle = 0;
+    }
 
     // if the robot is going counterclockwise,  we should follow the right sensor
     const Distance_Result outerDistance = isClockwise ? leftDistance : rightDistance;
@@ -215,7 +265,7 @@ void loop() {
     float err = last_error - heading;
     const float dist_err = outerDistance.distance - get_distance(currentSector);
 
-    if (outerDistance.distance <= 850 && width <= 1100 && 
+    /*if (outerDistance.distance <= 850 && width <= 1100 && 
       (sectorWidth[currentSector] == 0 || abs(sectorWidth[currentSector] - width) <= WIDTH_THRESHOLD) // in case one of the sensors disconnects, prevents turning 
     ) {
       angle += Kp * dist_err * (isClockwise ? 1 : -1);
@@ -225,7 +275,7 @@ void loop() {
         cumulativeWidth += width;
         measurementCount++;
       }
-    }
+    }*/
 
     if ((millis() - clockStop) >= 2500 && clockStop != 0) {
       engine.stop();

@@ -1,0 +1,19 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define MIN_ARENA_WIDTH 600
+#define MAX_ARENA_WIDTH 1000
+#define ROBOT_WIDTH 150
+#define BUTTON_PIN 12
+#define OBSTACLE_ROUND true
+#define ENABLE_MOTOR 27
+#define MOTOR_1 25
+#define MOTOR_2 26
+#define SERVO_PIN 33
+#define MIN_ANGLE 65
+#define MAX_ANGLE 115
+#define STRAIGHT_ANGLE 84
+#define TARGET_DISTANCE OBSTACLE_ROUND ? 500 : 500
+#define WIDTH_THRESHOLD 70
+
+#endif
