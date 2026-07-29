@@ -226,7 +226,7 @@ void loop() {
       int off = 0;
 
       if (block.m_signature == 1) {
-        off = -120;
+        off = -160;
         set_light_state(17, 1);
       } else {
         off = 80;
