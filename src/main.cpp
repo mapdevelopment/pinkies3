@@ -12,7 +12,7 @@
 
 // PPD Constants
 const float Kp = 0.09; // 0.1
-const float Kg = 0.95;
+const float Kg = 0.5;
 const float Kd = 0.05; // 0.1
 
 // Global variables
@@ -29,7 +29,7 @@ int measurementCount = 0;
 int clockStop = 0;
 bool button_state = 1;
 int ticks = 0;
-int currently_tracking = -1;
+bool obstacleDetected = false;
 
 // Class variables
 auto engine = Engine(MOTOR_1, MOTOR_2, ENABLE_MOTOR);
@@ -127,7 +127,7 @@ void loop() {
       return;
     }
 
-    engine.drive(150);
+    engine.drive(140);
     pixy.ccc.getBlocks();
 
     float heading = targetAngle - robotCompass.getYaw();
@@ -208,55 +208,45 @@ void loop() {
     /*
       Camera detection
     */
-    bool obstacleDetected = false;
-    if (OBSTACLE_ROUND && pixy.ccc.numBlocks > 0 && millis() > ticks) {
-      int max_area = 0;
-      Block block;
-      for (int i = 0; i < pixy.ccc.numBlocks; i++) {
-        long area = (long)pixy.ccc.blocks[i].m_width * pixy.ccc.blocks[i].m_height;
-        int index = pixy.ccc.blocks[i].m_index;
+    int max_area = 0;
+    Block block;
+    int found = false;
+    for (int i = 0; i < pixy.ccc.numBlocks; i++) {
+      auto _block = pixy.ccc.blocks[i];
+      long area = (long)_block.m_width * _block.m_height;
 
-        if (area > max_area || index == currently_tracking) {
-          max_area = area;
-          block = pixy.ccc.blocks[i];
-          if (index == currently_tracking) {
-            break;
-          }
-        }
+      if (area > max_area && _block.m_height > 12) {
+        max_area = area;
+        block = _block;
+        found = true;
       }
+    }
 
+    if (OBSTACLE_ROUND && found && millis() > ticks) {
       int off = 0;
-      if (currently_tracking != block.m_index) {
-        currently_tracking = block.m_index;
-        ticks = millis() + 100;
-        return;
-      }
 
       if (block.m_signature == 1) {
-        off = -90;
+        off = -120;
         set_light_state(17, 1);
       } else {
-        off = 90;
+        off = 80;
         set_light_state(16, 1);
       }
 
-      Serial.println("Block: " + String(block.m_signature) + " X: " + block.m_x + " Y: " + block.m_y + " W: " + block.m_width + " H: " + block.m_height);
+      //Serial.println("Block: " + String(block.m_signature) + " X: " + block.m_x + " Y: " + block.m_y + " W: " + block.m_width + " H: " + block.m_height);
 
-      int c_err = pixy.frameWidth / 2 + off * (pixy.frameHeight / block.m_height) - block.m_x;
+      int c_err = pixy.frameWidth / 2 + off - block.m_x;
       Serial.println("Error: " + String(c_err) + " Angle: " + angle);
-      if (block.m_height > 50 && block.m_height < 140)
-        angle = 0.08 * c_err;
+      angle = 0.35 * c_err;
+      obstacleDetected = true;
     } else {
-      set_light_state(16, 0);
-      set_light_state(17, 0);
+      set_light_state(16, 2);
+      set_light_state(17, 2);
 
-      if (currently_tracking != -1 && pixy.ccc.numBlocks == 0) {
-        currently_tracking = -1;
-        ticks = millis() + 100;
+      if (millis() > ticks && obstacleDetected) {
+        ticks = millis() + 400;
+        obstacleDetected = false;
       }
-
-      if (ticks > millis())
-        angle = 0;
     }
 
     // if the robot is going counterclockwise,  we should follow the right sensor
@@ -265,17 +255,21 @@ void loop() {
     float err = last_error - heading;
     const float dist_err = outerDistance.distance - get_distance(currentSector);
 
-    /*if (outerDistance.distance <= 850 && width <= 1100 && 
+    if (outerDistance.distance <= 850 && width <= 1100 && 
       (sectorWidth[currentSector] == 0 || abs(sectorWidth[currentSector] - width) <= WIDTH_THRESHOLD) // in case one of the sensors disconnects, prevents turning 
     ) {
-      angle += Kp * dist_err * (isClockwise ? 1 : -1);
+      if (millis() > ticks) {
+        angle += Kp * dist_err * (isClockwise ? 1 : -1);
+        set_light_state(16, 0);
+        set_light_state(17, 0);
+      }
 
       // vehicle learns the width's of the sectors
-      if (!OBSTACLE_ROUND && heading <= 3) {
+      if (!OBSTACLE_ROUND && heading <= 3.0) {
         cumulativeWidth += width;
         measurementCount++;
       }
-    }*/
+    }
 
     if ((millis() - clockStop) >= 2500 && clockStop != 0) {
       engine.stop();

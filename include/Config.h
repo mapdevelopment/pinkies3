@@ -10,7 +10,7 @@
 #define MOTOR_1 25
 #define MOTOR_2 26
 #define SERVO_PIN 33
-#define MIN_ANGLE 65
+#define MIN_ANGLE 55
 #define MAX_ANGLE 115
 #define STRAIGHT_ANGLE 84
 #define TARGET_DISTANCE OBSTACLE_ROUND ? 500 : 500
