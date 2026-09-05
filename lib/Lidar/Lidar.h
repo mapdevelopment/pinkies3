@@ -21,18 +21,18 @@ class Distance_Sensor {
 
     public:
         // Initialize with a window size of 10 samples
-        Distance_Sensor() : _sensor1(&Wire, -1), _filter(3) {}
+        Distance_Sensor() : _sensor1(&Wire, -1), _filter(5) {}
 
         bool begin(int8_t xshut, uint8_t newAddress) {
             _xshut = xshut;
             delay(50);
             digitalWrite(_xshut, HIGH);
 
-            if (_xshut == 15) {
+            if (_xshut != 0) {
                 if (!_sensor2.init()) return false;
                 _sensor2.setAddress(newAddress);
                 _sensor2.setDistanceMode(VL53L1X::Long);
-                _sensor2.setMeasurementTimingBudget(50000);
+                _sensor2.setMeasurementTimingBudget(100000);
                 _sensor2.startContinuous(50);
             } else {
                 if (_sensor1.InitSensor(newAddress) != 0) return false;
@@ -47,7 +47,7 @@ class Distance_Sensor {
             int raw_measurement = -1;
 
             // 1. Get raw reading from the specific sensor
-            if (_xshut == 15) {
+            if (_xshut != 0) {
                 int measurement = _sensor2.read();
                 if (!_sensor2.timeoutOccurred()) {
                     raw_measurement = measurement;
@@ -61,6 +61,8 @@ class Distance_Sensor {
                     _sensor1.VL53L4CD_GetResult(&results);
                     raw_measurement = results.distance_mm;
                     result.status = results.range_status;
+
+                    //if (results.signal_per_spad_kcps == 0) result.status = 4;
                 }
             }
 

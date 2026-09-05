@@ -21,11 +21,8 @@ float last_error = 0;
 float last_time = 0;
 float targetAngle = 0;
 int edge = 0;
-bool isClockwise = true;
+bool isClockwise = false;
 bool sideLock = false;
-int sectorWidth[4] = { 0 };
-int cumulativeWidth = 0;
-int measurementCount = 0;
 int clockStop = 0;
 bool button_state = 1;
 int ticks = 0;
@@ -39,16 +36,6 @@ Distance_Sensor leftSensor;
 Distance_Sensor rightSensor;
 Distance_Sensor frontSensor;
 Pixy2 pixy;
-
-int get_distance(int sector, bool turn = false) {
-  if (!OBSTACLE_ROUND) {
-    if (sectorWidth[sector] == 0)
-      return TARGET_DISTANCE;
-    else return sectorWidth[sector] * 2/3;
-  }
-
-  return TARGET_DISTANCE;
-}
 
 void setup() {
   Serial.begin(115200);
@@ -127,17 +114,18 @@ void loop() {
       return;
     }
 
-    engine.drive(140);
+    engine.drive(ENGINE_SPEED);
     pixy.ccc.getBlocks();
 
     float heading = targetAngle - robotCompass.getYaw();
-    if (heading > 180)  heading -= 360;
-    if (heading < -180) heading += 360;
+    while (heading > 180.0)  heading -= 360.0;
+    while (heading < -180.0) heading += 360.0;
 
     Distance_Result frontDistance = frontSensor.measureDistance();
     const Distance_Result leftDistance = leftSensor.measureDistance();
     const Distance_Result rightDistance = rightSensor.measureDistance();
-    const int width = leftDistance.distance + rightDistance.distance;
+    float width = leftDistance.distance + rightDistance.distance;
+    width *= abs(cos(radians(heading)));
 
     // Sector detection
     const int currentSector = abs(targetAngle) / 90;
@@ -145,78 +133,52 @@ void loop() {
     if (nextSector == 4) {
       nextSector = 0;
     }
-
-    // Turning
-    if (frontDistance.distance <= (get_distance(nextSector, true) + ROBOT_WIDTH)
-      && frontDistance.status == 0 && width >= 1000 && !OBSTACLE_ROUND) {
+    Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") R: " 
+    + rightDistance.distance + "(" + rightDistance.status + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm (" + frontDistance.status + ") Sector: " + currentSector + " Width: " + width) ;
+    
+    // Turning && frontDistance.status == 0 && width > MAX_ARENA_WIDTH
+    if (frontDistance.distance <= FRONT_DISTANCE) {
       if (!sideLock) {
-
-        // can be done using camera if orange line is detected first then we are going clockwise
-        isClockwise = (leftDistance.distance <= 700 && (leftDistance.status == 0 || leftDistance.status == 2))
-          || rightDistance.status == 4
-          || (rightDistance.distance >= leftDistance.distance && rightDistance.status == 2 && leftDistance.status == 2);
-
-        sideLock = true;
-      }
-
-      if (!OBSTACLE_ROUND && measurementCount > 0) {
-        const int w = cumulativeWidth / measurementCount + ROBOT_WIDTH;
-        // dynamic, but for competition it would be better to have fixed widths for the sectors (600 or 1000 mm)
-        /*
-        sectorWidth[currentSector] = (
-          abs(MAX_ARENA_WIDTH - w) > abs(MIN_ARENA_WIDTH - w)) ? MIN_ARENA_WIDTH : MAX_ARENA_WIDTH
-        ;
-        */
-        
-        sectorWidth[currentSector] = constrain(
-          w,
-          MIN_ARENA_WIDTH, 
-          MAX_ARENA_WIDTH) - ROBOT_WIDTH
-        ;
+        isClockwise = !(leftDistance.distance > rightDistance.distance || leftDistance.status == 4);
       }
 
       if (isClockwise) 
         targetAngle -= 90;
       else targetAngle += 90;
-      
-      targetAngle = fmod(targetAngle, 360.0);
-      while (abs(heading) >= 2) {
-        heading = targetAngle - robotCompass.getYaw();
-
-        if (isClockwise) {
-          myservo.write(MAX_ANGLE);
-        } else {
-          myservo.write(MIN_ANGLE);
-        }
-
-        delay(20);
+    
+      if (isClockwise) {
+        myservo.write(MIN_ANGLE);
+      } else {
+        myservo.write(MAX_ANGLE);
       }
 
+      delay(750);
+
       edge++;
+      sideLock = true;
+
       if (edge >= 12) {
         clockStop = millis();
       }
 
-      cumulativeWidth = 0;
-      measurementCount = 0;
+      myservo.write(STRAIGHT_ANGLE);
+      delay(600);
     }
 
     float angle = Kg * heading;
-    Serial.println(String("L: ") + leftDistance.distance + "mm (" + leftDistance.status + ") R: " 
-    + rightDistance.distance + "(" + rightDistance.status + ") Gyro: " + heading + " Front: " + frontDistance.distance + "mm (" + frontDistance.status + ") Sector: " + currentSector + " Width: " + width) ;
-    
+
     /*
       Camera detection
     */
-    int max_area = 0;
+    int max_y = 0; // Highest Y value means closest to the bottom of camera view
     Block block;
     int found = false;
+    
     for (int i = 0; i < pixy.ccc.numBlocks; i++) {
       auto _block = pixy.ccc.blocks[i];
-      long area = (long)_block.m_width * _block.m_height;
-
-      if (area > max_area && _block.m_height > 12) {
-        max_area = area;
+      
+      if (_block.m_y > max_y && _block.m_height < 70 && _block.m_height > 8) {
+        max_y = _block.m_y;
         block = _block;
         found = true;
       }
@@ -226,25 +188,27 @@ void loop() {
       int off = 0;
 
       if (block.m_signature == 1) {
-        off = -160;
-        set_light_state(17, 1);
+        off = -105;
+        set_light_state(17, 2);
+        set_light_state(16, 0);
       } else {
-        off = 80;
-        set_light_state(16, 1);
+        off = 55;
+        set_light_state(16, 2);
+        set_light_state(17, 0);
       }
 
       //Serial.println("Block: " + String(block.m_signature) + " X: " + block.m_x + " Y: " + block.m_y + " W: " + block.m_width + " H: " + block.m_height);
 
       int c_err = pixy.frameWidth / 2 + off - block.m_x;
       Serial.println("Error: " + String(c_err) + " Angle: " + angle);
-      angle = 0.35 * c_err;
+      angle = 0.32 * c_err;
       obstacleDetected = true;
     } else {
       set_light_state(16, 2);
       set_light_state(17, 2);
 
       if (millis() > ticks && obstacleDetected) {
-        ticks = millis() + 400;
+        ticks = millis() + 450;
         obstacleDetected = false;
       }
     }
@@ -253,22 +217,10 @@ void loop() {
     const Distance_Result outerDistance = isClockwise ? leftDistance : rightDistance;
 
     float err = last_error - heading;
-    const float dist_err = outerDistance.distance - get_distance(currentSector);
+    const float dist_err = outerDistance.distance - TARGET_DISTANCE;
 
-    if (outerDistance.distance <= 850 && width <= 1100 && 
-      (sectorWidth[currentSector] == 0 || abs(sectorWidth[currentSector] - width) <= WIDTH_THRESHOLD) // in case one of the sensors disconnects, prevents turning 
-    ) {
-      if (millis() > ticks) {
-        angle += Kp * dist_err * (isClockwise ? 1 : -1);
-        set_light_state(16, 0);
-        set_light_state(17, 0);
-      }
-
-      // vehicle learns the width's of the sectors
-      if (!OBSTACLE_ROUND && heading <= 3.0) {
-        cumulativeWidth += width;
-        measurementCount++;
-      }
+    if ((millis() > ticks && pixy.ccc.numBlocks == 0 && OBSTACLE_ROUND) || (!OBSTACLE_ROUND && sideLock)) {
+      angle += Kp * dist_err * (isClockwise ? 1 : -1);
     }
 
     if ((millis() - clockStop) >= 2500 && clockStop != 0) {
