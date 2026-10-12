@@ -116,10 +116,8 @@ Block camera_find_pillar() {
     if (current_block.m_signature != 1 && current_block.m_signature != 2) 
       continue;
 
-    //SerialBT.println(String("Matau: W: ") + current_block.m_width + " H: " + current_block.m_height);
-
-    if (current_block.m_y > high_y && current_block.m_height < 90 && current_block.m_height > 35 
-      && current_block.m_width > 20) {
+    if (current_block.m_y > high_y && current_block.m_height > 45 && current_block.m_height < 110
+      && current_block.m_width > 35) {
       high_y = current_block.m_y;
       last_block = current_block;
     }
@@ -166,15 +164,15 @@ void loop() {
     const Distance_Result outerWall = isClockwise ? rightDistance : leftDistance;
     const Block target = camera_find_pillar();
     const int timespan = millis() - lastTurn;
+    const int trackDelay = millis() - trackingDelay;
     bool avoiding = false;
-    bool canTurn = (sideLock ? outerWall.distance > MAX_ARENA_WIDTH : width > MAX_ARENA_WIDTH);
+    bool canTurn = false; // (sideLock ? outerWall.distance > MAX_ARENA_WIDTH : width > MAX_ARENA_WIDTH);
 
     if (state == AVOIDANCE && target.m_width > 0) {
-      int block_offset = target.m_signature == 1 ? 220 : -200;
-      const int camera_err = pixy.frameWidth / 2 + block_offset - target.m_x;
+      const int camera_err = target.m_signature == 1 ? target.m_x : (target.m_x - pixy.frameWidth) ;
 
       if (!canTurn || afterTurn) {
-        angle += camera_err * 0.32;
+        angle += camera_err * 0.17;
         avoiding = true;
         trackingDelay = millis();
         SerialBT.println(String("Err: ") + camera_err + " X: " + target.m_x + "H: " + target.m_height + " W: " + target.m_width + " Signature: " + target.m_signature + " Angle: " + angle + " avoiding obstacles ");
@@ -237,15 +235,11 @@ void loop() {
     angle = constrain(STRAIGHT_ANGLE + round(angle), MIN_ANGLE, MAX_ANGLE);
     myservo.write(angle);
 
-    //SerialBT.println(width);
-
     // Enables target avoidance, it will be overwritten if the robot is required to do a turn
-    const int trackDelay = millis() - trackingDelay;
     if (target.m_height > 0 && OBSTACLE_ROUND)
       state = AVOIDANCE;
-    else if (trackDelay > 400) {
-      if (trackDelay > 800)
-        afterTurn = false;
+    else if (trackDelay > 800) {
+      afterTurn = false;
 
       if(state != FOLLOWING)
         SerialBT.println("sWITCHING STATE TO FOLLOWING");
@@ -265,7 +259,8 @@ void loop() {
     if (frontDistance.distance < FRONT_DISTANCE &&
       frontDistance.status != 7 &&
       canTurn &&
-      (target.m_width == 0 || !OBSTACLE_ROUND)
+      (target.m_width == 0 || !OBSTACLE_ROUND) &&
+      abs(heading) < 20
     ) {
       state = TURN;
       SerialBT.println("performs a turn");
