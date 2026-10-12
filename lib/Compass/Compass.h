@@ -9,28 +9,25 @@ private:
     Adafruit_BNO08x bno08x;
     sh2_SensorValue_t sensorValue;
     int8_t _resetPin;
+    float currentYaw; // <-- Added to cache the last good reading
 
 public:
-    // Pass -1 if you don't have a reset pin wired, but it's highly recommended!
-    Compass(int8_t resetPin = 32) : _resetPin(resetPin) {}
+    Compass(int8_t resetPin = 32) : _resetPin(resetPin), currentYaw(0.0) {}
 
     bool begin() {
-        // 1. HARDWARE RESET (If pin is provided)
         if (_resetPin != -1) {
             pinMode(_resetPin, OUTPUT);
             digitalWrite(_resetPin, LOW);
             delay(50); 
             digitalWrite(_resetPin, HIGH);
-            delay(200); // Important: BNO085 takes time to boot its internal ARM core
+            delay(200); 
         }
 
-        // 2. INITIALIZE I2C
-        // Note: The Adafruit library handles Wire.begin() internally if not already called
         if (!bno08x.begin_I2C(0x4A) && !bno08x.begin_I2C(0x4B)) {
             return false;
         }
 
-        // 3. ENABLE REPORTS
+        // 50000 microseconds = 50ms interval (20Hz)
         if (!bno08x.enableReport(SH2_GAME_ROTATION_VECTOR, 50000)) {
             return false;
         }
@@ -39,23 +36,27 @@ public:
     }
 
     float getYaw() {
-        if (!bno08x.getSensorEvent(&sensorValue)) return -1.0;
+        // Pump the BNO08x queue to process all pending events
+        while (bno08x.getSensorEvent(&sensorValue)) {
+            if (sensorValue.sensorId == SH2_GAME_ROTATION_VECTOR) {
+                float i = sensorValue.un.gameRotationVector.i;
+                float j = sensorValue.un.gameRotationVector.j;
+                float k = sensorValue.un.gameRotationVector.k;
+                float r = sensorValue.un.gameRotationVector.real;
 
-        if (sensorValue.sensorId == SH2_GAME_ROTATION_VECTOR) {
-            float i = sensorValue.un.gameRotationVector.i;
-            float j = sensorValue.un.gameRotationVector.j;
-            float k = sensorValue.un.gameRotationVector.k;
-            float r = sensorValue.un.gameRotationVector.real;
+                float siny_cosp = 2 * (r * k + i * j);
+                float cosy_cosp = 1 - 2 * (j * j + k * k);
+                float yaw = atan2(siny_cosp, cosy_cosp);
 
-            float siny_cosp = 2 * (r * k + i * j);
-            float cosy_cosp = 1 - 2 * (j * j + k * k);
-            float yaw = atan2(siny_cosp, cosy_cosp);
-
-            float degrees = yaw * (180.0 / M_PI);
-            if (degrees < 0) degrees += 360.0;
-            return degrees;
+                float degrees = yaw * (180.0 / M_PI);
+                if (degrees < 0) degrees += 360.0;
+                
+                currentYaw = degrees; // Save the newly computed orientation
+            }
         }
-        return -1.0;
+        
+        // Always return the last known good configuration state
+        return currentYaw; 
     }
 };
 
