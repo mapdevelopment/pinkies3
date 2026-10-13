@@ -78,15 +78,15 @@ void setup() {
   set_light_state(16, 3);
   
   pixy.init();
-  pixy.setLamp(0, 0);
-  pixy.setLED(255, 192, 203);
+  pixy.setLamp(1, 0);
+  pixy.setLED(0, 0, 0);
 };
 
 enum StateManager : uint8_t {
     AVOIDANCE, TURN, FOLLOWING, PARKING_START, STAND_BY
 };
 
-StateManager state = OBSTACLE_ROUND ? PARKING_START : FOLLOWING;
+StateManager state = FOLLOWING;
 
 int targetAngle;
 int started = false;
@@ -97,42 +97,14 @@ bool isClockwise = false;
 unsigned long lastTurn = 0;
 bool sideLock = false;
 int edgeCount = 0;
-bool afterTurn = false;
-signed long trackingDelay = 0;
 
 // PID
 constexpr float Kg = 0.6;
 constexpr float Kp = 0.09;
 constexpr float Kd = 0.05;
 
-Block camera_find_pillar() {
-  Block last_block; 
-  float high_y = 0.0; 
-
-  int total_blocks = pixy.ccc.getBlocks();
-
-  for (int i = 0; i < total_blocks; i++) {
-    auto current_block = pixy.ccc.blocks[i];
-    if (current_block.m_signature != 1 && current_block.m_signature != 2) 
-      continue;
-
-    if (current_block.m_y > high_y && current_block.m_height > 45 && current_block.m_height < 110
-      && current_block.m_width > 35) {
-      high_y = current_block.m_y;
-      last_block = current_block;
-    }
-  }
-
-  if (high_y != 0.0) {
-    return last_block;
-  }
-
-  return Block();
-}
-
 void loop() {
     const int button_state = digitalRead(BUTTON_PIN);
-
     blink_lights();
 
     if (button_state == 0) {
@@ -160,30 +132,13 @@ void loop() {
     const Distance_Result rightDistance = rightSensor.measureDistance();
 
     const int width = (leftDistance.distance + rightDistance.distance) * abs(cos(radians(heading)));
-    const Distance_Result innerWall = isClockwise ? leftDistance : rightDistance;
-    const Distance_Result outerWall = isClockwise ? rightDistance : leftDistance;
-    const Block target = camera_find_pillar();
+    const Distance_Result outerDistance = isClockwise ? leftDistance : rightDistance;
+    const Distance_Result innerDistance = isClockwise ? rightDistance : leftDistance;
     const int timespan = millis() - lastTurn;
-    const int trackDelay = millis() - trackingDelay;
-    bool avoiding = false;
-    bool canTurn = false; // (sideLock ? outerWall.distance > MAX_ARENA_WIDTH : width > MAX_ARENA_WIDTH);
 
-    if (state == AVOIDANCE && target.m_width > 0) {
-      const int camera_err = target.m_signature == 1 ? target.m_x : (target.m_x - pixy.frameWidth) ;
+    if (state == TURN) {
+      set_light_state(17, 1);
 
-      if (!canTurn || afterTurn) {
-        angle += camera_err * 0.17;
-        avoiding = true;
-        trackingDelay = millis();
-        SerialBT.println(String("Err: ") + camera_err + " X: " + target.m_x + "H: " + target.m_height + " W: " + target.m_width + " Signature: " + target.m_signature + " Angle: " + angle + " avoiding obstacles ");
-        
-        if (target.m_signature == 1)
-          set_light_state(16, 1);
-        else set_light_state(17, 1);
-      }
-    } else if (state == PARKING_START) {
-      SerialBT.println("parking");
-    } else if (state == TURN) {
       if (isClockwise) 
         targetAngle -= 90;
       else targetAngle += 90;
@@ -198,36 +153,26 @@ void loop() {
 
       delay(TURN_DELAY);
 
-      if (OBSTACLE_ROUND) {
-        myservo.write(STRAIGHT_ANGLE);
-        engine.drive(-ENGINE_SPEED);
-        delay(1000);
-      }
-      
+      set_light_state(17, 0);
       state = STAND_BY;
-      afterTurn = true;
       edgeCount++;
       lastTurn = millis();
 
       return;
     } else if (state == FOLLOWING) {
-      const int error = innerWall.distance - TARGET_DISTANCE;
-      if (abs(heading) < 25.0 && sideLock) {
-        angle += Kp * error * (isClockwise ? 1 : -1);
-
-        SerialBT.println(String("w: ") + width + " H:" + heading + " L: " + leftDistance.distance + " (" + 
-          leftDistance.status + ") R: " + rightDistance.distance + " (" + rightDistance.status + ") T: " + frontDistance.distance + " (" + frontDistance.status + ") isClockwise: " + isClockwise + " Heading: " + heading);
+      const int error = innerDistance.distance - TARGET_DISTANCE;
+      if (abs(heading) < 25.0 && sideLock && width < MAX_ARENA_WIDTH) {
+        angle += Kp * error * (isClockwise ? -1 : 1);
       }
-
-     set_light_state(17, 0);
-     set_light_state(16, 0);
     }
-  
+
+    SerialBT.println(String("w: ") + width + " H:" + heading + " L: " + leftDistance.distance + " (" + 
+      leftDistance.status + ") R: " + rightDistance.distance + " (" + rightDistance.status + ") T: " + frontDistance.distance + " (" + frontDistance.status + ") isClockwise: " + isClockwise + " Heading: " + heading);
+
     const int d_time = millis() - last_measurement;
     const float d = d_time > 0 ? (heading - last_error) / d_time : 0; 
 
-    if (!avoiding)
-      angle += Kg * heading + Kd * d;
+    angle += Kg * heading + Kd * d;
 
     last_error = heading;
     last_measurement = millis();
@@ -236,20 +181,9 @@ void loop() {
     myservo.write(angle);
 
     // Enables target avoidance, it will be overwritten if the robot is required to do a turn
-    if (target.m_height > 0 && OBSTACLE_ROUND)
-      state = AVOIDANCE;
-    else if (trackDelay > 800) {
-      afterTurn = false;
+    state = FOLLOWING;
 
-      if(state != FOLLOWING)
-        SerialBT.println("sWITCHING STATE TO FOLLOWING");
-
-      state = FOLLOWING;
-    } else {
-        state = STAND_BY;
-    }
-
-    if (timespan < 3000) return;
+    if (timespan < 2000) return;
 
     if (edgeCount == 12) {
       engine.stop();
@@ -258,9 +192,7 @@ void loop() {
 
     if (frontDistance.distance < FRONT_DISTANCE &&
       frontDistance.status != 7 &&
-      canTurn &&
-      (target.m_width == 0 || !OBSTACLE_ROUND) &&
-      abs(heading) < 20
+      (sideLock ? innerDistance.distance > MAX_ARENA_WIDTH : width > MAX_ARENA_WIDTH)
     ) {
       state = TURN;
       SerialBT.println("performs a turn");
